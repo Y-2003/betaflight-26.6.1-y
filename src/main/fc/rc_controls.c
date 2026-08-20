@@ -68,6 +68,8 @@
 
 #include "rc_controls.h"
 
+#include "flight/autonomous_mode.h"
+
 // true if arming is done via the sticks (as opposed to a switch)
 static bool isUsingSticksToArm = true;
 static bool disarmUserRequested = false; // has the user requested a disarm, using either sticks or switches, whether armed or disarmed
@@ -181,21 +183,28 @@ void processRcStickPositions(void)
             // Arming via ARM BOX
             tryArm();
         } else {
-            resetTryingToArm();
-            // Disarming via ARM BOX
-              disarmUserRequested = true;
-            resetArmingDisabled();
             const bool boxFailsafeSwitchIsOn = IS_RC_MODE_ACTIVE(BOXFAILSAFE);
-            if (ARMING_FLAG(ARMED) && (failsafeIsReceivingRxData() || boxFailsafeSwitchIsOn)) {
-                // in a true signal loss situation, allow disarm only once we regain validated RxData (failsafeIsReceivingRxData = true),
-                // to avoid potentially false disarm signals soon after link recover
-                // Note that BOXFAILSAFE will also drive failsafeIsReceivingRxData false (immediately at start or end)
-                // That's why we explicitly allow disarm here if BOXFAILSAFE switch is active
-                // Note that BOXGPSRESCUE mode does not trigger failsafe - we can always disarm in that mode
-                rcDisarmTicks++;
-                if (rcDisarmTicks > 3) {
-                    // require three duplicate disarm values in a row before we disarm
-                    disarm(DISARM_REASON_SWITCH);
+
+            if (autonomousModeOwnsArming() && !boxFailsafeSwitchIsOn) {
+                rcDisarmTicks = 0;
+            }else{
+                resetTryingToArm();
+
+                // Disarming via ARM BOX
+               disarmUserRequested = true;
+               resetArmingDisabled();
+
+                if (ARMING_FLAG(ARMED) && (failsafeIsReceivingRxData() || boxFailsafeSwitchIsOn)) {
+                    // in a true signal loss situation, allow disarm only once we regain validated RxData (failsafeIsReceivingRxData = true),
+                    // to avoid potentially false disarm signals soon after link recover
+                    // Note that BOXFAILSAFE will also drive failsafeIsReceivingRxData false (immediately at start or end)
+                    // That's why we explicitly allow disarm here if BOXFAILSAFE switch is active
+                    // Note that BOXGPSRESCUE mode does not trigger failsafe - we can always disarm in that mode
+                    rcDisarmTicks++;
+                    if (rcDisarmTicks > 3) {
+                        // require three duplicate disarm values in a row before we disarm
+                        disarm(DISARM_REASON_SWITCH);
+                    }
                 }
             }
         }

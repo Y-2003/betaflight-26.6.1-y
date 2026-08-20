@@ -166,6 +166,7 @@ COMMON_SRC = \
             fc/rc_modes.c \
             flight/alt_hold_multirotor.c \
             flight/alt_hold_wing.c \
+            flight/autonomous_mode.c \
             flight/autopilot_multirotor.c \
             flight/autopilot_wing.c \
             flight/dyn_notch_filter.c \

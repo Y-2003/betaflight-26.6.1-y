@@ -25,6 +25,10 @@
 #include <math.h>
 
 #include "platform.h"
+#ifdef SITL
+#include <stdio.h>
+#endif
+
 
 #include "blackbox/blackbox.h"
 #include "blackbox/blackbox_fielddefs.h"
@@ -559,21 +563,24 @@ void disarm(flightLogDisarmReason_e reason)
     }
 }
 
-void tryArm(void)
+static bool tryArmInternal(bool autonomous)
 {
     if (armingConfig()->gyro_cal_on_first_arm) {
         gyroStartCalibration(true);
     }
 
-
     updateArmingStatus();
     // set or clear armingDisabled flags, while arming is requested, whether armed or disarmed,
 
+    armingDisableFlags_e blockingFlags = getArmingDisableFlags();
 
-    if (!isArmingDisabled()) {
+    if(autonomous) {
+        blockingFlags &= ~ARMING_DISABLED_ANGLE;
+    }
+
+    if (!blockingFlags) {
         if (ARMING_FLAG(ARMED)) {
-            return;
-            // don't allow arming if there are active armingDisabled flags or already armed
+            return true;
         }
         const timeUs_t currentTimeUs = micros();
 
@@ -591,7 +598,7 @@ if (beaconTimeDiff < DSHOT_BEACON_GUARD_DELAY_US && beaconTimeDiff >= 0) {
             tryingToArm = ARMING_DELAYED_NORMAL;
         }
     }
-    return;
+    return false;
 }
 
 if (isMotorProtocolDshot()) {
@@ -625,6 +632,10 @@ if (isMotorProtocolDshot()) {
         mixerResetRpmLimiter();
 #endif
         ENABLE_ARMING_FLAG(ARMED);  // ***ARM NOW ***
+
+        #ifdef SITL
+        printf("[ARM] success autonomous=%d\n", autonomous ? 1 : 0);
+        #endif
 
 #ifdef USE_RC_STATS
         NotifyRcStatsArming();
@@ -675,17 +686,31 @@ if (isMotorProtocolDshot()) {
         runawayTakeoffAccumulatedUs = 0;
         runawayTakeoffTriggerUs = 0;
 #endif
+        return true;
     } else {
        resetTryingToArm();
-        if (!isFirstArmingGyroCalibrationRunning()) {
+
+        if (!autonomous && !isFirstArmingGyroCalibrationRunning()) {
             int armingDisabledReason = ffs(getArmingDisableFlags());
+
             if (lastArmingDisabledReason != armingDisabledReason) {
                 lastArmingDisabledReason = armingDisabledReason;
-
                 beeperWarningBeeps(armingDisabledReason);
             }
         }
     }
+
+    return false;
+}
+
+void tryArm(void)
+{
+    (void)tryArmInternal(false);
+}
+
+bool tryArmAutonomous(void)
+{
+    return tryArmInternal(true);
 }
 
 // Automatic ACC Offset Calibration

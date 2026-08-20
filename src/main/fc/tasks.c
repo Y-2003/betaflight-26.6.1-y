@@ -54,6 +54,7 @@
 #include "fc/runtime_config.h"
 
 #include "flight/alt_hold.h"
+#include "flight/autonomous_mode.h"
 #include "flight/gps_rescue.h"
 #include "flight/imu.h"
 #include "flight/mixer.h"
@@ -125,7 +126,19 @@
 
 static void taskMain(timeUs_t currentTimeUs)
 {
-    UNUSED(currentTimeUs);
+
+   #ifdef SITL
+    static bool autonomousTestWasActive = false;
+    const bool autonomousTestIsActive = rcData[6] > 1800;
+
+    if (autonomousTestIsActive && !autonomousTestWasActive) {
+        autonomousModeStartArmAcquisition();
+    }
+
+    autonomousTestWasActive = autonomousTestIsActive;
+#endif
+
+    autonomousModeUpdate(currentTimeUs);
 
 #ifdef USE_SDCARD
     afatfs_poll();
