@@ -18,6 +18,19 @@ channels[4] = 1000  # CH5 ARM
 channels[5] = 1000  # CH6 AUTOPILOT
 channels[6] = 1000  # CH7 autonomous TEST trigger
 channels[7] = 1000  # CH8 BOXFAILSAFE
+channels[8] = 1000  # CH9 RELEASE command
+
+channel_labels = [
+    "ROLL",
+    "PITCH",
+    "THROTTLE",
+    "YAW",
+    "ARM",
+    "AUTOPILOT",
+    "AUTO AUTHORIZATION",
+    "BOXFAILSAFE",
+    "RELEASE COMMAND",
+]
 
 running = True
 lock = threading.Lock()
@@ -26,14 +39,15 @@ lock = threading.Lock()
 def print_status():
     with lock:
         print("\nCurrent RC:")
-        for i in range(8):
-            print(f"  CH{i + 1}: {channels[i]}")
+        for i in range(9):
+            print(f"  CH{i + 1}: {channels[i]}  # {channel_labels[i]}")
 
         print()
         print(f"  ARM         : {'ON' if channels[4] > 1800 else 'OFF'}")
         print(f"  AUTOPILOT   : {'ON' if channels[5] > 1800 else 'OFF'}")
         print(f"  AUTO TEST   : {'ON' if channels[6] > 1800 else 'OFF'}")
         print(f"  BOXFAILSAFE : {'ON' if channels[7] > 1800 else 'OFF'}")
+        print(f"  RELEASE     : {'ON' if channels[8] > 1800 else 'OFF'}")
         print()
 
 
@@ -55,6 +69,9 @@ Commands:
 
   boxfailsafe on
   boxfailsafe off
+
+  release on
+  release off
 
   status
   help
@@ -131,6 +148,16 @@ Commands:
                     channels[7] = 1000
                 print("BOXFAILSAFE OFF (CH8=1000)")
 
+            elif parts == ["release", "on"]:
+                with lock:
+                    channels[8] = 2000
+                print("RELEASE ON (CH9=2000)")
+
+            elif parts == ["release", "off"]:
+                with lock:
+                    channels[8] = 1000
+                print("RELEASE OFF (CH9=1000)")
+
             elif parts == ["status"]:
                 print_status()
 
@@ -142,6 +169,7 @@ Commands:
   autopilot on/off
   auto on/off
   boxfailsafe on/off
+  release on/off
   status
   quit
 """)

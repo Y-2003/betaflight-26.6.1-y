@@ -274,6 +274,21 @@ static void sendMotorUpdate(void)
 
 static void updateState(const fdm_packet* pkt)
 {
+
+    #ifdef SITL
+    static uint64_t lastAccPrintUs = 0;
+    const uint64_t nowUs = micros64_real();
+
+    if (nowUs - lastAccPrintUs >= 1000000) {
+        lastAccPrintUs = nowUs;
+
+        printf("[SIM_ACC] x=%.3f y=%.3f z=%.3f\n",
+            pkt->imu_linear_acceleration_xyz[0],
+            pkt->imu_linear_acceleration_xyz[1],
+            pkt->imu_linear_acceleration_xyz[2]);
+    }
+    #endif
+
     static double last_timestamp = 0; // in seconds
     static uint64_t last_realtime = 0; // in uS
     static struct timespec last_ts; // last packet

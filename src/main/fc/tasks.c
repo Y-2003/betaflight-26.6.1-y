@@ -132,10 +132,18 @@ static void taskMain(timeUs_t currentTimeUs)
     const bool autonomousTestIsActive = rcData[6] > 1800;
 
     if (autonomousTestIsActive && !autonomousTestWasActive) {
-        autonomousModeStartArmAcquisition();
+        autonomousModeAuthorize();;
     }
-
     autonomousTestWasActive = autonomousTestIsActive;
+
+    static bool autonomousReleaseWasActive = false;
+    const bool autonomousReleaseIsActive = rcData[8] > 1800;
+
+    if (autonomousReleaseIsActive && !autonomousReleaseWasActive) {
+        autonomousModeRequestRelease();
+    }
+    autonomousReleaseWasActive = autonomousReleaseIsActive;
+
 #endif
 
     autonomousModeUpdate(currentTimeUs);
