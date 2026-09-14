@@ -331,6 +331,10 @@ void initActiveBoxIds(void)
 
     BME(BOXPARALYZE);
 
+    BME(BOXUSER1);
+    BME(BOXUSER2);
+    BME(BOXUSER3);
+
 #ifdef USE_PINIOBOX
     // Turn BOXUSERx only if pinioBox facility monitors them, as the facility is the only BOXUSERx observer.
     // Note that pinioBoxConfig can be set to monitor any box.

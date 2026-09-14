@@ -65,6 +65,7 @@
 
 #include "flight/failsafe.h"
 #include "flight/gps_rescue.h"
+#include "flight/autonomous_mode.h"
 #include "flight/alt_hold.h"
 #include "flight/pos_hold.h"
 
@@ -1066,6 +1067,8 @@ void processRxModes(timeUs_t currentTimeUs)
 
     bool canUseHorizonMode = true;
     if ((IS_RC_MODE_ACTIVE(BOXANGLE)
+        || autonomousModeRequestsAngle()
+        || IS_RC_MODE_ACTIVE(BOXUSER3)
         || failsafeIsActive()
 #ifdef USE_ALTITUDE_HOLD
         || FLIGHT_MODE(ALT_HOLD_MODE)
@@ -1194,13 +1197,14 @@ void processRxModes(timeUs_t currentTimeUs)
         && !FLIGHT_MODE(GPS_RESCUE_MODE)
         // and either the alt_hold switch is activated, or are in failsafe landing mode,
         // or an autopilot mission needs altitude control, or a switch-rescue fallback descent
-        && (IS_RC_MODE_ACTIVE(BOXALTHOLD) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE) || flightPlanNavIsRescueDescentActive())
+        && (autonomousModeRequestsAltitudeHold() || (!autonomousModeSuppressesPilotHoldModes()
+        && IS_RC_MODE_ACTIVE(BOXALTHOLD)) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE) || flightPlanNavIsRescueDescentActive())
         // and we have Acc for self-levelling
         && sensors(SENSOR_ACC)
         // and we have altitude data
         && isAltitudeAvailable()
         // but not until throttle is raised
-        && wasThrottleRaised()) {
+        && (wasThrottleRaised() || autonomousModeRequestsAltitudeHold())) {
         if (!FLIGHT_MODE(ALT_HOLD_MODE)) {
             ENABLE_FLIGHT_MODE(ALT_HOLD_MODE);
         }
@@ -1216,11 +1220,13 @@ void processRxModes(timeUs_t currentTimeUs)
         && !FLIGHT_MODE(GPS_RESCUE_MODE)
         // and either the pos_hold switch is activated, or are in failsafe landing mode,
         // or an autopilot mission needs the position controller
-        && (IS_RC_MODE_ACTIVE(BOXPOSHOLD) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE))
+        && (autonomousModeRequestsPositionHold()
+            || (!autonomousModeSuppressesPilotHoldModes()
+                && (IS_RC_MODE_ACTIVE(BOXPOSHOLD) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE))))
         // and we have Acc for self-levelling
         && sensors(SENSOR_ACC)
         // but not until throttle is raised
-        && wasThrottleRaised()) {
+        && (wasThrottleRaised() || autonomousModeRequestsPositionHold())) {
         if (!FLIGHT_MODE(POS_HOLD_MODE)) {
             ENABLE_FLIGHT_MODE(POS_HOLD_MODE);
         }

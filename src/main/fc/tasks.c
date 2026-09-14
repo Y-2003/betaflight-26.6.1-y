@@ -127,24 +127,46 @@
 static void taskMain(timeUs_t currentTimeUs)
 {
 
-   #ifdef SITL
-    static bool autonomousTestWasActive = false;
-    const bool autonomousTestIsActive = rcData[6] > 1800;
+    static bool autonomousAuthorizationWasHigh = false;
+    static bool autonomousReleaseWasHigh = false;
+    static bool autonomousAuthorizationSeenLow = false;
+    static bool autonomousReleaseSeenLow = false;
 
-    if (autonomousTestIsActive && !autonomousTestWasActive) {
-        autonomousModeAuthorize();;
+    const bool autonomousCommandsAvailable =
+        isRxReceivingSignal()
+        && rxAreFlightChannelsValid();
+
+    if (autonomousCommandsAvailable) {
+    const bool authorizationHigh = IS_RC_MODE_ACTIVE(BOXUSER1);
+    const bool releaseHigh = IS_RC_MODE_ACTIVE(BOXUSER2);
+    const bool abortActive = IS_RC_MODE_ACTIVE(BOXUSER3);
+
+    if (abortActive) {
+        // USER3 高位期间持续阻止自主流程
+        autonomousModeAbort();
+
+        // 更新边沿状态，但不执行授权和释放
+        autonomousAuthorizationWasHigh = authorizationHigh;
+        autonomousReleaseWasHigh = releaseHigh;
+    } else {
+        // 开机后必须先看到低电平，防止高位开关自动触发
+        if (!authorizationHigh) {
+            autonomousAuthorizationSeenLow = true;
+        } else if (!autonomousAuthorizationWasHigh
+                   && autonomousAuthorizationSeenLow) {
+            autonomousModeAuthorize();
+        }
+        autonomousAuthorizationWasHigh = authorizationHigh;
+
+        if (!releaseHigh) {
+            autonomousReleaseSeenLow = true;
+        } else if (!autonomousReleaseWasHigh
+                   && autonomousReleaseSeenLow) {
+            autonomousModeRequestRelease();
+        }
+        autonomousReleaseWasHigh = releaseHigh;
     }
-    autonomousTestWasActive = autonomousTestIsActive;
-
-    static bool autonomousReleaseWasActive = false;
-    const bool autonomousReleaseIsActive = rcData[8] > 1800;
-
-    if (autonomousReleaseIsActive && !autonomousReleaseWasActive) {
-        autonomousModeRequestRelease();
     }
-    autonomousReleaseWasActive = autonomousReleaseIsActive;
-
-#endif
 
     autonomousModeUpdate(currentTimeUs);
 

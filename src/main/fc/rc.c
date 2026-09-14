@@ -46,6 +46,7 @@
 #include "flight/gps_rescue.h"
 #include "flight/pid.h"
 #include "flight/pid_init.h"
+#include "flight/autonomous_mode.h"
 
 #include "pg/autopilot.h"
 
@@ -662,6 +663,10 @@ FAST_CODE void processRcCommand(void)
                 angleRate = autopilotGetYawRate();
                 rcDeflection[axis] = 0;
                 rcDeflectionAbs[axis] = 0;
+            } else if (autonomousModeSuppressesPilotInput()) {
+                angleRate = 0.0f;
+                rcDeflection[axis] = 0.0f;
+                rcDeflectionAbs[axis] = 0.0f;
             } else {
                 // scale rcCommandf to range [-1.0, 1.0]
                 float rcCommandf;
@@ -733,6 +738,10 @@ FAST_CODE_NOINLINE void updateRcCommands(void)
     }
 
     rcCommand[THROTTLE] = rcLookupThrottle(tmp);
+
+    if (autonomousModeSuppressesPilotInput()) {
+    rcCommand[THROTTLE] = autopilotGetEffectiveHoverThrottlePwm();
+    }
 
     if (featureIsEnabled(FEATURE_3D) && !failsafeIsActive()) {
         if (!flight3DConfig()->switched_mode3d) {

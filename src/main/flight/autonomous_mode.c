@@ -13,19 +13,30 @@
 
 #include "flight/imu.h"
 #include "sensors/acceleration.h"
+#include "sensors/gyro.h"
 
 #define AUTONOMOUS_FREEFALL_ACCEL_THRESHOLD_G 0.30f
 #define AUTONOMOUS_FREEFALL_CONFIRM_TIME_US 100000
+#define AUTONOMOUS_HOVER_STABLE_TIME_US 500000
+#define AUTONOMOUS_HOVER_STABLE_RATE_DPS 30
 
 static autonomousModeState_e autonomousModeState = AUTONOMOUS_MODE_IDLE;
 
 static bool autonomousFreefallCandidateActive = false;
 static timeUs_t autonomousFreefallCandidateStartUs = 0;
+static bool autonomousHoverStableCandidateActive = false;
+static timeUs_t autonomousHoverStableStartUs = 0;
 
 static void autonomousModeResetFreefallDetection(void)
 {
     autonomousFreefallCandidateActive = false;
     autonomousFreefallCandidateStartUs = 0;
+}
+
+static void autonomousModeResetHoverStability(void)
+{
+    autonomousHoverStableCandidateActive = false;
+    autonomousHoverStableStartUs = 0;
 }
 
 bool autonomousModeAuthorize(void)
@@ -79,12 +90,54 @@ void autonomousModeStartArmAcquisition(void)
 void autonomousModeAbort(void)
 {
     autonomousModeResetFreefallDetection();
-    autonomousModeState = AUTONOMOUS_MODE_IDLE;
+    autonomousModeResetHoverStability();
+
+    if (ARMING_FLAG(ARMED) && autonomousModeState != AUTONOMOUS_MODE_IDLE) {
+        autonomousModeState = AUTONOMOUS_MODE_MANUAL_HANDOFF;
+    } else {
+        autonomousModeState = AUTONOMOUS_MODE_IDLE;
+    }
 }
 
 bool autonomousModeOwnsArming(void)
 {
-    return autonomousModeState == AUTONOMOUS_MODE_ARM_ACQUISITION || autonomousModeState == AUTONOMOUS_MODE_ARMED;
+    return autonomousModeState == AUTONOMOUS_MODE_ARM_ACQUISITION
+        || autonomousModeState == AUTONOMOUS_MODE_ARMED
+        || autonomousModeState == AUTONOMOUS_MODE_HOVER_ENTRY
+        || autonomousModeState == AUTONOMOUS_MODE_MANUAL_HANDOFF;
+}
+
+bool autonomousModeSuppressesPilotInput(void)
+{
+    return autonomousModeState == AUTONOMOUS_MODE_AUTHORIZED
+        || autonomousModeState == AUTONOMOUS_MODE_RELEASE_WAITING
+        || autonomousModeState == AUTONOMOUS_MODE_ARM_ACQUISITION
+        || autonomousModeState == AUTONOMOUS_MODE_HOVER_ENTRY
+        || autonomousModeState == AUTONOMOUS_MODE_ARMED;
+}
+
+bool autonomousModeRequestsAngle(void)
+{
+    return autonomousModeState == AUTONOMOUS_MODE_HOVER_ENTRY
+        || autonomousModeState == AUTONOMOUS_MODE_ARMED
+        || autonomousModeState == AUTONOMOUS_MODE_MANUAL_HANDOFF;
+}
+
+bool autonomousModeRequestsAltitudeHold(void)
+{
+    return autonomousModeState == AUTONOMOUS_MODE_ARMED;
+}
+
+bool autonomousModeRequestsPositionHold(void)
+{
+    return autonomousModeState == AUTONOMOUS_MODE_ARMED;
+}
+
+bool autonomousModeSuppressesPilotHoldModes(void)
+{
+    return autonomousModeState == AUTONOMOUS_MODE_HOVER_ENTRY
+        || autonomousModeState == AUTONOMOUS_MODE_ARMED
+        || autonomousModeState == AUTONOMOUS_MODE_MANUAL_HANDOFF;
 }
 
 autonomousModeState_e autonomousModeGetState(void)
@@ -158,12 +211,14 @@ void autonomousModeUpdate(timeUs_t currentTimeUs)
 
     case AUTONOMOUS_MODE_ARM_ACQUISITION:
         if (ARMING_FLAG(ARMED)) {
-            autonomousModeState = AUTONOMOUS_MODE_ARMED;
+            autonomousModeResetHoverStability();
+            autonomousModeState = AUTONOMOUS_MODE_HOVER_ENTRY;
             return;
         }
 
         if (tryArmAutonomous()) {
-            autonomousModeState = AUTONOMOUS_MODE_ARMED;
+            autonomousModeResetHoverStability();
+            autonomousModeState = AUTONOMOUS_MODE_HOVER_ENTRY;
 
         #ifdef SITL
             printf("[AUTO] ARM success\n");
@@ -174,6 +229,34 @@ void autonomousModeUpdate(timeUs_t currentTimeUs)
         return;
 
     case AUTONOMOUS_MODE_ARMED:
+    case AUTONOMOUS_MODE_HOVER_ENTRY:
+        if (!ARMING_FLAG(ARMED)) {
+            autonomousModeResetHoverStability();
+            autonomousModeState = AUTONOMOUS_MODE_IDLE;
+            return;
+        }
+
+        const bool hoverStable = gyroAbsRateDps(FD_ROLL) <= AUTONOMOUS_HOVER_STABLE_RATE_DPS
+            && gyroAbsRateDps(FD_PITCH) <= AUTONOMOUS_HOVER_STABLE_RATE_DPS
+            && gyroAbsRateDps(FD_YAW) <= AUTONOMOUS_HOVER_STABLE_RATE_DPS;
+        if (!hoverStable) {
+            autonomousModeResetHoverStability();
+            return;
+        }
+
+        if (!autonomousHoverStableCandidateActive) {
+            autonomousHoverStableCandidateActive = true;
+            autonomousHoverStableStartUs = currentTimeUs;
+            return;
+        }
+
+        if (cmpTimeUs(currentTimeUs, autonomousHoverStableStartUs) >= AUTONOMOUS_HOVER_STABLE_TIME_US) {
+            autonomousModeResetHoverStability();
+            autonomousModeState = AUTONOMOUS_MODE_ARMED;
+        }
+        return;
+
+    case AUTONOMOUS_MODE_MANUAL_HANDOFF:
         if (!ARMING_FLAG(ARMED)) {
             autonomousModeState = AUTONOMOUS_MODE_IDLE;
         }
