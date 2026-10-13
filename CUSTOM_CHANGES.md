@@ -66,23 +66,24 @@ IDLE
   -> ACCEL_WAITING
   -> FLIP（机体倒置时）
   -> HOVER_ENTRY
+  -> BRAKING
   -> ARMED
 ```
 
-机体未倒置时，`ACCEL_WAITING` 可直接进入 `HOVER_ENTRY`；稳定悬停 500 ms 后进入 `ARMED`。自主翻转最多持续 1 秒，结束阈值和油门闭环参数均在 `autonomous_mode.c` 文件头部定义。
+机体未倒置时，`ACCEL_WAITING` 可直接进入 `HOVER_ENTRY`。`HOVER_ENTRY` 保持悬停油门余量的 50% 作为保守入口参考；当加速度计有效且机体倾角恢复到约 26 度以内、Z 高度估计有效时进入 `BRAKING`。`BRAKING` 从实测位置和速度启动 jerk/加速度受限的竖直、水平减速轨迹，高度闭环在此阶段接管油门；XY 估计无效时只执行定高减速。速度、加速度和姿态稳定约 250 ms 后进入 `ARMED`，再锁定最终高度，XY 有效时锁定最终位置。自主翻转最多持续 1 秒，结束阈值和油门闭环参数均在 `autonomous_mode.c` 文件头部定义。
 
 ## 自主状态机
 
 ### [自定义新增] `src/main/flight/autonomous_mode.h`
 
 - 第 8-13 行：`autonomousUser1Position_e`，定义 USER1 的低、中、高和无效位置。
-- 第 15-22 行：`autonomousModeState_e`，定义空闲、等待 ARM、自由落体检测、翻转、已解锁和悬停入口状态。
+- 第 15-23 行：`autonomousModeState_e`，定义空闲、等待 ARM、自由落体检测、翻转、已解锁、悬停入口和自主减速状态。
 - 第 25-50 行：声明自主流程更新、解锁接管、油门覆盖、翻转输出、控制模式请求、状态读取和中止接口。
 - 第 48-50 行：USER1 高度/位置保持兼容接口固定返回 `false`。
 
 ### [自定义新增] `src/main/flight/autonomous_mode.c`
 
-- 第 25-42 行：自由落体、悬停、USER1 防抖、USER2 延时和翻转闭环参数。
+- 第 25-50 行：自由落体、悬停、USER1 防抖、USER2 延时、翻转闭环和自主减速轨迹参数。
 - 第 81 行：`autonomousModeResetFreefallDetection()`，复位自由落体候选检测。
 - 第 89 行：`autonomousModeResetHoverStability()`，复位悬停稳定候选检测。
 - 第 97 行：`autonomousModeReadUser1Position()`，通过 BOXUSER1 配置取得 AUX 通道并读取原始拨杆位置。
@@ -91,9 +92,9 @@ IDLE
 - 第 162 行：`autonomousModeAbort()`，中止当前流程并回到空闲状态。
 - 第 168-198 行：提供自主解锁接管、飞手输入屏蔽、油门覆盖和自主油门 PWM 输出。
 - 第 202-220 行：提供自主翻转状态、角速度和油门输出。
-- 第 224-250 行：提供 ANGLE、高度保持、位置保持及飞手保持模式屏蔽请求。
+- 第 224-330 行：提供 ANGLE、高度保持、位置保持、飞手保持模式屏蔽请求和自主减速轨迹目标接口。
 - 第 253-274 行：读取自主状态和 USER1 位置；USER1 高度/位置保持兼容接口固定返回 `false`。
-- 第 277 行：`autonomousModeUpdate()`，处理 USER2/USER3/ARM 边沿、failsafe 恢复、USER1 位置变化、自由落体检测、自动解锁、翻转和悬停稳定状态流转；SITL 下每秒输出姿态和加速度诊断。
+- 第 350 行：`autonomousModeUpdate()`，处理 USER2/USER3/ARM 边沿、failsafe 恢复、USER1 位置变化、自由落体检测、自动解锁、翻转、入口调平、BRAKING 轨迹和最终保持状态流转；SITL 下每秒输出姿态和加速度诊断。
 - 第 545 行：`autonomousModeResetFlip()`，复位翻转轴、方向、角速度和油门控制量。
 - 第 557 行：`autonomousModeStartFlip()`，根据重力投影选择翻转轴和方向，并复位 PID 积分。
 - 第 587 行：`autonomousModeUpdateFlipControl()`，根据倾角和实际角速度闭环更新翻转角速度及油门，并限制油门变化速率。

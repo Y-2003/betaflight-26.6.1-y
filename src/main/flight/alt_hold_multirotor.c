@@ -31,6 +31,7 @@
 #include "fc/runtime_config.h"
 
 #include "flight/autopilot.h"
+#include "flight/autonomous_mode.h"
 #include "flight/failsafe.h"
 #include "flight/flight_plan_nav.h"
 #include "flight/position.h"
@@ -40,6 +41,18 @@
 #include "pg/autopilot.h"
 
 #include "alt_hold.h"
+
+#ifdef UNIT_TEST
+// The focused altitude unit test does not link the autonomous state machine.
+// Keep the pilot-hold fixture independent from that production module.
+__attribute__((weak)) bool autonomousModeRequestsAltitudeHold(void) { return false; }
+__attribute__((weak)) bool autonomousModeGetAltitudeSetpoint(float *targetAltitudeCm, float *targetVelocityCmS)
+{
+    UNUSED(targetAltitudeCm);
+    UNUSED(targetVelocityCmS);
+    return false;
+}
+#endif
 
 static const float taskIntervalSeconds = HZ_TO_INTERVAL(ALTHOLD_TASK_RATE_HZ); // i.e. 0.01 s
 
@@ -83,7 +96,14 @@ static void altHoldProcessTransitions(void) {
     if (FLIGHT_MODE(ALT_HOLD_MODE)) {
         if (!altHold.isActive) {
             altHoldReset();
-            autopilotCaptureHoverThrottleForAltHold();
+            // Autonomous braking owns its hover baseline. Capturing the
+            // conservative 50% entry PWM here would make the vertical loop
+            // inherit an underpowered hover value when ap_hover_throttle=0.
+            if (!autonomousModeRequestsAltitudeHold()) {
+                autopilotCaptureHoverThrottleForAltHold();
+            } else {
+                autopilotClearAltHoldHoverThrottle();
+            }
             altHold.isActive = true;
         }
     } else {
@@ -149,13 +169,20 @@ static void altHoldUpdateTargetAltitude(void)
 
 static void altHoldUpdate(void)
 {
-    
+    float targetAltitudeCm;
+    float targetAltitudeVelocity;
+
+    if (autonomousModeGetAltitudeSetpoint(&targetAltitudeCm, &targetAltitudeVelocity)) {
+        altitudeControl(targetAltitudeCm, taskIntervalSeconds, targetAltitudeVelocity, altHoldMaxClimbRate());
+        return;
+    }
+
     if (altHoldConfig()->climbRate) {
         altHoldUpdateTargetAltitude(); // check if the pilot has changed the target altitude using sticks
     }
 
-    float targetAltitudeCm = altHold.targetAltitudeCm; 
-    float targetAltitudeVelocity = altHold.targetVelocity;
+    targetAltitudeCm = altHold.targetAltitudeCm;
+    targetAltitudeVelocity = altHold.targetVelocity;
 
     if (positionNavHasActiveTarget()) {
         const positionNavCommand_t *navCmd = positionNavGetActiveCommand();

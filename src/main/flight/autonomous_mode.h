@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "common/vector.h"
 #include "common/time.h"
 
 typedef enum {
@@ -19,6 +20,7 @@ typedef enum {
     AUTONOMOUS_MODE_FLIP,
     AUTONOMOUS_MODE_ARMED,
     AUTONOMOUS_MODE_HOVER_ENTRY,
+    AUTONOMOUS_MODE_BRAKING,
 } autonomousModeState_e;
 
 // [新增] 功能：进入自由落体检测阶段。
@@ -48,3 +50,8 @@ autonomousUser1Position_e autonomousModeGetUser1Position(void);
 // [兼容] USER1 不直接请求高度/位置保持；这两个接口始终返回 false。
 bool autonomousModeUserRequestsAltitudeHold(void);
 bool autonomousModeUserRequestsPositionHold(void);
+
+// Autonomous-only jerk/acceleration-limited braking setpoints. The normal
+// pilot ALT HOLD/POS HOLD paths do not use these interfaces.
+bool autonomousModeGetAltitudeSetpoint(float *targetAltitudeCm, float *targetVelocityCmS);
+bool autonomousModeGetPositionSetpoint(vector2_t *targetPosition, vector2_t *targetVelocity, bool *positionLocked, float *angleLimitScale);

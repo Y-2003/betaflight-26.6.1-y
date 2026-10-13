@@ -34,6 +34,7 @@
 #include "fc/runtime_config.h"
 
 #include "flight/imu.h"
+#include "flight/autonomous_mode.h"
 #include "flight/position.h"
 #include "flight/position_estimator.h"
 #include "rx/rx.h"
@@ -46,6 +47,19 @@
 
 #ifdef USE_POSITION_HOLD
 #include "flight/pos_hold.h"
+#endif
+
+#ifdef UNIT_TEST
+// The focused position-hold unit test does not link the autonomous state
+// machine; this weak fallback leaves its pilot-mode fixture unchanged.
+__attribute__((weak)) bool autonomousModeGetPositionSetpoint(vector2_t *targetPosition, vector2_t *targetVelocity, bool *positionLocked, float *angleLimitScale)
+{
+    UNUSED(targetPosition);
+    UNUSED(targetVelocity);
+    UNUSED(positionLocked);
+    UNUSED(angleLimitScale);
+    return false;
+}
 #endif
 
 // DEBUG_AUTOPILOT_PID each parameter on the axis set by gyro_filter_debug_axis
@@ -664,6 +678,13 @@ bool positionControl(void)
 {
 
     const positionEstimate3d_t *est = positionEstimatorGetEstimate();
+    vector2_t autonomousTargetPosition;
+    vector2_t autonomousTargetVelocity;
+    bool autonomousPositionLocked = false;
+    float autonomousAngleLimitScale = 1.0f;
+    const bool autonomousPositionControl = autonomousModeGetPositionSetpoint(
+        &autonomousTargetPosition, &autonomousTargetVelocity,
+        &autonomousPositionLocked, &autonomousAngleLimitScale);
     const timeDelta_t posholdDtUs = getTaskDeltaTimeUs(TASK_SELF);
     const float dt = (posholdDtUs > 0) ? (posholdDtUs * 1e-6f) : HZ_TO_INTERVAL(POSHOLD_TASK_RATE_HZ);
 
@@ -718,7 +739,20 @@ bool positionControl(void)
     ap.anchor = ANCHOR_HOLD;
     ap.iPolicy = I_ACCUMULATE;
 
-    if (ap.navActive) {
+    if (autonomousPositionControl) {
+        // Autonomous braking follows the measured position until the
+        // jerk-limited velocity trajectory has stopped. Only then is a true
+        // position lock enabled, avoiding a snap back to a stale entry point.
+        isPositionHeld = autonomousPositionLocked;
+        targetPosition = autonomousTargetPosition;
+        targetVelocity = autonomousTargetVelocity;
+        targetAcceleration.v[EF_EAST] = 0.0f;
+        targetAcceleration.v[EF_NORTH] = 0.0f;
+        ap.isPosHoldBraking = !autonomousPositionLocked;
+        ap.anchor = ANCHOR_HOLD;
+        ap.iPolicy = autonomousPositionLocked ? I_ACCUMULATE : I_FREEZE;
+        ap.sticksActive = false;
+    } else if (ap.navActive) {
         isPositionHeld = false;
         if (!wasNavActive) {
             initNavMode();
@@ -968,9 +1002,10 @@ bool positionControl(void)
     angleV.v[AI_ROLL]  = vector2Cross(&headingV, &pidSumVectorEF);
 
     const float mag = vector2Norm(&angleV);
-    wasAngleSaturated = (mag > ap.maxAngle);
-    if (mag > ap.maxAngle && mag > 0.001f) {
-        const float scale = ap.maxAngle / mag;
+    const float effectiveMaxAngle = ap.maxAngle * (autonomousPositionControl ? autonomousAngleLimitScale : 1.0f);
+    wasAngleSaturated = (mag > effectiveMaxAngle);
+    if (mag > effectiveMaxAngle && mag > 0.001f) {
+        const float scale = effectiveMaxAngle / mag;
         vector2Scale(&angleV, &angleV, scale);
     }
 
