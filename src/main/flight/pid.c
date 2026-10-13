@@ -46,6 +46,7 @@
 #include "fc/runtime_config.h"
 
 #include "flight/autopilot.h"
+#include "flight/autonomous_mode.h"
 #include "flight/gps_rescue.h"
 #include "flight/imu.h"
 #include "flight/mixer.h"
@@ -646,10 +647,16 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_
     return currentPidSetpoint;
 }
 
+// [修改] 功能：处理失控恢复逻辑，并在自主翻转期间跳过失控恢复干预。
 static FAST_CODE_NOINLINE void handleCrashRecovery(
     const pidCrashRecovery_e crash_recovery, const rollAndPitchTrims_t *angleTrim,
     const int axis, const timeUs_t currentTimeUs, const float gyroRate, float *currentPidSetpoint, float *errorRate)
 {
+    if (autonomousModeIsFlipActive()) {
+        pidRuntime.inCrashRecoveryMode = false;
+        return;
+    }
+
     if (pidRuntime.inCrashRecoveryMode && cmpTimeUs(currentTimeUs, pidRuntime.crashDetectedAtUs) > pidRuntime.crashTimeDelayUs) {
         if (crash_recovery == PID_CRASH_RECOVERY_BEEP) {
             BEEP_ON;
@@ -688,13 +695,16 @@ static FAST_CODE_NOINLINE void handleCrashRecovery(
     }
 }
 
+// [修改] 功能：检测碰撞恢复条件，并在自主翻转期间禁止碰撞恢复触发。
 static FAST_CODE_NOINLINE void detectAndSetCrashRecovery(
     const pidCrashRecovery_e crash_recovery, const int axis,
     const timeUs_t currentTimeUs, const float delta, const float errorRate)
 {
     // if crash recovery is on and accelerometer enabled and there is no gyro overflow, then check for a crash
     // no point in trying to recover if the crash is so severe that the gyro overflows
-    if ((crash_recovery || FLIGHT_MODE(GPS_RESCUE_MODE)) && !gyroOverflowDetected()) {
+    if (!autonomousModeIsFlipActive()
+        && (crash_recovery || FLIGHT_MODE(GPS_RESCUE_MODE))
+        && !gyroOverflowDetected()) {
         if (ARMING_FLAG(ARMED)) {
             if (getMotorMixRange() >= 1.0f && !pidRuntime.inCrashRecoveryMode
                 && fabsf(delta) > pidRuntime.crashDtermThreshold
@@ -1045,6 +1055,7 @@ NOINLINE static void applySpa(int axis, const pidProfile_t *pidProfile)
 
 // Betaflight pid controller, which will be maintained in the future with additional features specialised for current (mini) multirotor usage.
 // Based on 2DOF reference design (matlab)
+// [修改] 功能：运行 PID 控制器，同时使用修正后的 chirp 轴类型和自主翻转保护。
 void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTimeUs)
 {
     static float previousGyroRateDterm[XYZ_AXIS_COUNT];
@@ -1140,7 +1151,7 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 
 #ifdef USE_CHIRP
 
-    static int chirpAxis = 0;
+    static flight_dynamics_index_t chirpAxis = FD_ROLL;
     static bool shouldChirpAxisToggle = false;
 
     float chirp = 0.0f;
@@ -1156,7 +1167,7 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
         if (shouldChirpAxisToggle) {
             // toggle chirp signal logic and increment to next axis for next run
             shouldChirpAxisToggle = false;
-            chirpAxis = (++chirpAxis > FD_YAW) ? 0 : chirpAxis;
+            chirpAxis = (chirpAxis >= FD_YAW) ? FD_ROLL : (flight_dynamics_index_t)(chirpAxis + 1);
             // reset chirp signal generator
             chirpReset(&pidRuntime.chirp);
         }
@@ -1171,7 +1182,7 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
     // 2: instantaneous chirp frequency in deci-Hz — maps time to frequency for spectral analysis
     // 3: raw chirp excitation × 1000 (before phase comp filter) — reference signal for cross-correlation
     DEBUG_SET(DEBUG_CHIRP, 0, lrintf(5.0e3f * sinarg));
-    DEBUG_SET(DEBUG_CHIRP, 1, FLIGHT_MODE(CHIRP_MODE) ? chirpAxis : -1);
+    DEBUG_SET(DEBUG_CHIRP, 1, FLIGHT_MODE(CHIRP_MODE) ? (int)chirpAxis : -1);
     DEBUG_SET(DEBUG_CHIRP, 2, lrintf(10.0f * pidRuntime.chirp.fchirp));
     DEBUG_SET(DEBUG_CHIRP, 3, lrintf(1.0e3f * chirp));
 
@@ -1182,7 +1193,7 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 
 #ifdef USE_CHIRP
         float currentChirp = 0.0f;
-        if(axis == chirpAxis){
+        if (axis == chirpAxis) {
             currentChirp = pidRuntime.chirpAmplitude[axis] * chirpFiltered;
         }
 #endif // USE_CHIRP

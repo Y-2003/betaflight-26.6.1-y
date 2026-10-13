@@ -120,6 +120,9 @@
 #define USE_ALTITUDE_HOLD
 #define USE_POSITION_HOLD
 #define USE_FLIGHT_PLAN
+#define USE_CHIRP
+#define USE_RX_MSP
+#define USE_RX_MASP_OVERRIDE
 
 #define USE_PARAMETER_GROUPS
 
@@ -232,9 +235,11 @@ struct i2cResource_s;
 
 typedef struct {
     double timestamp;                   // in seconds
-    double imu_angular_velocity_rpy[3]; // rad/s -> range: +/- 8192; +/- 2000 deg/se
-    double imu_linear_acceleration_xyz[3];    // m/s/s NED, body frame -> sim 1G = 9.80665, FC 1G = 256
-    double imu_orientation_quat[4];     //w, x, y, z
+    double imu_angular_velocity_rpy[3]; // rad/s, Gazebo IMU sensor frame (FRD)
+    // UDP packet frame: Gazebo IMU sensor axes (FRD). sitl.c negates all
+    // three components before feeding the Betaflight body frame (FLU).
+    double imu_linear_acceleration_xyz[3];    // m/s/s, FRD sensor frame
+    double imu_orientation_quat[4];     // w, x, y, z, Gazebo bridge packet frame
     double velocity_xyz[3];             // m/s, earth frame. ENU (Ve, Vn, Vup) for virtual GPS mode (USE_VIRTUAL_GPS)!
     double position_xyz[3];             // meters, NED from origin. Longitude, Latitude, Altitude (ENU) for virtual GPS mode (USE_VIRTUAL_GPS)!
     double pressure;

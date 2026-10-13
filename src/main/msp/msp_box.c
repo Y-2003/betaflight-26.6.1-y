@@ -197,6 +197,8 @@ void serializeBoxReply(sbuf_t *dst, int page, serializeBoxFn *serializeBox)
     }
 }
 
+// [修改] 功能：初始化 MSP 可见开关，并暴露 USER1/USER2/USER3 的 AUX 通道映射入口。
+// USER1 的配置仅用于选择待读取的通道，不会直接启用高度或位置保持模式。
 void initActiveBoxIds(void)
 {
     // calculate used boxes based on features and set corresponding activeBoxIds bits

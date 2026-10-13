@@ -107,6 +107,9 @@ void failsafeCheckDataFailurePeriod(void);
 failsafePhase_e failsafePhase(void);
 bool failsafeIsMonitoring(void);
 bool failsafeIsActive(void);
+bool failsafeIsAutonomousLockActive(void);
+// [新增] 功能：由自主流程请求或解除接收链路锁定。
+void failsafeRequestAutonomousLock(bool active);
 bool failsafeIsReceivingRxData(void);
 void failsafeOnRxSuspend(uint32_t suspendPeriod);
 void failsafeOnRxResume(void);

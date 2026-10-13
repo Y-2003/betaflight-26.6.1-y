@@ -49,6 +49,7 @@ extern "C" {
 
     extern boxBitmask_t rcModeActivationMask;
     extern uint16_t flightModeFlags;
+    extern bool testRxFlightChannelsValid;
 }
 
 #include "unittest_macros.h"
@@ -104,6 +105,14 @@ void deactivateBoxFailsafe()
 {
     boxBitmask_t newMask;
     memset(&newMask, 0, sizeof(newMask));
+    rcModeUpdate(&newMask);
+}
+
+void activateBoxUser2()
+{
+    boxBitmask_t newMask;
+    memset(&newMask, 0, sizeof(newMask));
+    bitArraySet(&newMask, BOXUSER2);
     rcModeUpdate(&newMask);
 }
 
@@ -247,7 +256,7 @@ TEST(FlightFailsafeTest, TestFailsafeCausesLanding)
     EXPECT_EQ(FAILSAFE_LANDING, failsafePhase());
 
     // adjust time to point just past the landing time
-    sysTickUptime++;
+    sysTickUptime += PERIOD_RXDATA_RECOVERY + 1;
     failsafeOnValidDataFailed();                    // confirm that we still have no valid data
 
     // when
@@ -714,6 +723,53 @@ TEST(FlightFailsafeTest, TestFailsafeNotActivatedWhenDisarmedAndRXLossIsDetected
     EXPECT_FALSE(isArmingDisabled());
 }
 
+/****************************************************************************************/
+TEST(FlightFailsafeTest, TestAutonomousLockAutoReleasesAfterDisarmWithUser2High)
+{
+    configureFailsafe();
+    failsafeConfigMutable()->failsafe_procedure = FAILSAFE_PROCEDURE_DROP_IT;
+    failsafeInit();
+    failsafeReset();
+    failsafeStartMonitoring();
+    resetCallCounters();
+    deactivateBoxFailsafe();
+    throttleStatus = THROTTLE_HIGH;
+    DISABLE_ARMING_FLAG(ARMED);
+    sysTickUptime = 0;
+
+    // Establish a healthy link before USER2 intentionally starts failsafe.
+    failsafeOnValidDataReceived();
+    sysTickUptime += PERIOD_RXDATA_RECOVERY + 1;
+    failsafeOnValidDataReceived();
+    failsafeUpdateState();
+    EXPECT_EQ(FAILSAFE_IDLE, failsafePhase());
+
+    ENABLE_ARMING_FLAG(ARMED);
+    // USER2 high starts the one-shot synthetic RX lock.
+    activateBoxUser2();
+    failsafeRequestAutonomousLock(true);
+    sysTickUptime += (failsafeConfig()->failsafe_delay * MILLIS_PER_TENTH_SECOND) + 1;
+    failsafeOnValidDataFailed();
+    failsafeUpdateState();
+    EXPECT_EQ(FAILSAFE_RX_LOSS_MONITORING, failsafePhase());
+
+    // The real disarm() clears ARMED. The unit-test stub only counts it.
+    DISABLE_ARMING_FLAG(ARMED);
+    testRxFlightChannelsValid = true;
+
+    // Once failsafe has disarmed the aircraft, the one-shot lock must release
+    // even while USER2 remains high, allowing the autonomous delay to start.
+    sysTickUptime += PERIOD_RXDATA_RECOVERY + 1;
+    failsafeOnValidDataReceived();
+    failsafeUpdateState();
+    EXPECT_FALSE(failsafeIsActive());
+    EXPECT_FALSE(failsafeIsAutonomousLockActive());
+    EXPECT_EQ(FAILSAFE_IDLE, failsafePhase());
+    EXPECT_EQ((armingDisableFlags_e)0, getArmingDisableFlags());
+    deactivateBoxFailsafe();
+    testRxFlightChannelsValid = false;
+}
+
 //
 // rx-loss policy tests (flight plan / AUTOPILOT)
 //
@@ -894,6 +950,7 @@ float rcCommand[4];
 int16_t debug[DEBUG16_VALUE_COUNT];
 uint8_t debugMode = 0;
 bool isUsingSticksToArm = true;
+bool testRxFlightChannelsValid = false;
 
 PG_REGISTER(rxConfig_t, rxConfig, PG_RX_CONFIG, 0);
 
@@ -933,6 +990,11 @@ void beeper(beeperMode_e mode)
 bool isUsingSticksForArming(void)
 {
     return isUsingSticksToArm;
+}
+
+bool rxAreFlightChannelsValid(void)
+{
+    return testRxFlightChannelsValid;
 }
 
 bool testSticksActive = false;

@@ -272,6 +272,7 @@ static void sendMotorUpdate(void)
     udpSend(&pwmLink, &pwmPkt, sizeof(servo_packet));
 }
 
+// [修改] 功能：更新 SITL 飞行状态，并周期输出仿真加速度诊断信息。
 static void updateState(const fdm_packet* pkt)
 {
 

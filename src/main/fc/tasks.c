@@ -124,49 +124,9 @@
 // Add a margin to the task duration estimation
 #define RX_TASK_MARGIN 1
 
+// [修改] 功能：运行主后台任务，并周期推进自主飞行状态机。
 static void taskMain(timeUs_t currentTimeUs)
 {
-
-    static bool autonomousAuthorizationWasHigh = false;
-    static bool autonomousReleaseWasHigh = false;
-    static bool autonomousAuthorizationSeenLow = false;
-    static bool autonomousReleaseSeenLow = false;
-
-    const bool autonomousCommandsAvailable =
-        isRxReceivingSignal()
-        && rxAreFlightChannelsValid();
-
-    if (autonomousCommandsAvailable) {
-    const bool authorizationHigh = IS_RC_MODE_ACTIVE(BOXUSER1);
-    const bool releaseHigh = IS_RC_MODE_ACTIVE(BOXUSER2);
-    const bool abortActive = IS_RC_MODE_ACTIVE(BOXUSER3);
-
-    if (abortActive) {
-        // USER3 高位期间持续阻止自主流程
-        autonomousModeAbort();
-
-        // 更新边沿状态，但不执行授权和释放
-        autonomousAuthorizationWasHigh = authorizationHigh;
-        autonomousReleaseWasHigh = releaseHigh;
-    } else {
-        // 开机后必须先看到低电平，防止高位开关自动触发
-        if (!authorizationHigh) {
-            autonomousAuthorizationSeenLow = true;
-        } else if (!autonomousAuthorizationWasHigh
-                   && autonomousAuthorizationSeenLow) {
-            autonomousModeAuthorize();
-        }
-        autonomousAuthorizationWasHigh = authorizationHigh;
-
-        if (!releaseHigh) {
-            autonomousReleaseSeenLow = true;
-        } else if (!autonomousReleaseWasHigh
-                   && autonomousReleaseSeenLow) {
-            autonomousModeRequestRelease();
-        }
-        autonomousReleaseWasHigh = releaseHigh;
-    }
-    }
 
     autonomousModeUpdate(currentTimeUs);
 

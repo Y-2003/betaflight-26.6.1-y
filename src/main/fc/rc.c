@@ -104,8 +104,12 @@ laggedMovingAverageCombined_t  feedforwardDeltaAvg[XYZ_AXIS_COUNT];
 
 static pt1Filter_t feedforwardYawHoldLpf;
 
+// [修改] 功能：计算前馈值，并在自主翻转期间关闭飞手前馈输入。
 float getFeedforward(int axis)
 {
+    if (autonomousModeIsFlipActive()) {
+        return 0.0f;
+    }
 #ifdef USE_RC_SMOOTHING_FILTER
     return rxConfig()->rc_smoothing ? feedforwardSmoothed[axis] : feedforwardRaw[axis];
 #else
@@ -619,6 +623,7 @@ bool shouldUpdateSmoothing(void)
     return false;
 }
 
+// [修改] 功能：生成姿态角速度指令，并在自主流程中屏蔽或替换飞手输入。
 FAST_CODE void processRcCommand(void)
 {
     bool updateSmoothing = false;
@@ -663,6 +668,10 @@ FAST_CODE void processRcCommand(void)
                 angleRate = autopilotGetYawRate();
                 rcDeflection[axis] = 0;
                 rcDeflectionAbs[axis] = 0;
+            } else if (autonomousModeIsFlipActive()) {
+                angleRate = autonomousModeGetFlipRate(axis);
+                rcDeflection[axis] = 0.0f;
+                rcDeflectionAbs[axis] = 0.0f;
             } else if (autonomousModeSuppressesPilotInput()) {
                 angleRate = 0.0f;
                 rcDeflection[axis] = 0.0f;
@@ -708,6 +717,7 @@ FAST_CODE void processRcCommand(void)
     isRxDataNew = false;
 }
 
+// [修改] 功能：更新 RC 通道命令，并应用自主翻转或悬停阶段的油门覆盖。
 FAST_CODE_NOINLINE void updateRcCommands(void)
 {
     isRxDataNew = true;
@@ -739,8 +749,10 @@ FAST_CODE_NOINLINE void updateRcCommands(void)
 
     rcCommand[THROTTLE] = rcLookupThrottle(tmp);
 
-    if (autonomousModeSuppressesPilotInput()) {
-    rcCommand[THROTTLE] = autopilotGetEffectiveHoverThrottlePwm();
+    if (autonomousModeIsFlipActive()) {
+        rcCommand[THROTTLE] = autonomousModeGetFlipThrottlePwm();
+    } else if (autonomousModeOverridesThrottle()) {
+        rcCommand[THROTTLE] = autonomousModeGetThrottlePwm();
     }
 
     if (featureIsEnabled(FEATURE_3D) && !failsafeIsActive()) {

@@ -76,6 +76,7 @@ void resetArmingDisabled(void);
 
 void disarm(flightLogDisarmReason_e reason);
 void tryArm(void);
+// [新增] 功能：使用自主流程允许的解锁条件尝试解锁并返回结果。
 bool tryArmAutonomous(void);
 
 bool processRx(timeUs_t currentTimeUs);

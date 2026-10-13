@@ -144,6 +144,7 @@ throttleStatus_e calculateThrottleStatus(void)
     doNotRepeat = false; \
 }
 
+// [修改] 功能：处理摇杆解锁/解锁开关，并在自主流程接管时禁止普通解锁。
 void processRcStickPositions(void)
 {
     // time the sticks are maintained
@@ -180,26 +181,31 @@ void processRcStickPositions(void)
     if (!isUsingSticksToArm) {
         if (IS_RC_MODE_ACTIVE(BOXARM)) {
             rcDisarmTicks = 0;
-            // Arming via ARM BOX
-            tryArm();
+            // USER3 is the explicit autonomous throw-mode enable. Block
+            // normal arming for the whole high-level interval, including
+            // the scheduler window before autonomousModeUpdate() claims it.
+            // BOXARM low still disarms below.
+            if (!autonomousModeOwnsArming() && !IS_RC_MODE_ACTIVE(BOXUSER3)) {
+                tryArm();
+            }
         } else {
             const bool boxFailsafeSwitchIsOn = IS_RC_MODE_ACTIVE(BOXFAILSAFE);
 
+            // Keep the synthetic USER2 failsafe arming block while the
+            // autonomous state machine owns the arming decision. Clearing
+            // it here every RC cycle makes USER2 appear unable to lock the
+            // aircraft when ARM is low.
             if (autonomousModeOwnsArming() && !boxFailsafeSwitchIsOn) {
                 rcDisarmTicks = 0;
-            }else{
+            } else {
                 resetTryingToArm();
 
                 // Disarming via ARM BOX
-               disarmUserRequested = true;
-               resetArmingDisabled();
+                disarmUserRequested = true;
+                resetArmingDisabled();
 
                 if (ARMING_FLAG(ARMED) && (failsafeIsReceivingRxData() || boxFailsafeSwitchIsOn)) {
-                    // in a true signal loss situation, allow disarm only once we regain validated RxData (failsafeIsReceivingRxData = true),
-                    // to avoid potentially false disarm signals soon after link recover
-                    // Note that BOXFAILSAFE will also drive failsafeIsReceivingRxData false (immediately at start or end)
-                    // That's why we explicitly allow disarm here if BOXFAILSAFE switch is active
-                    // Note that BOXGPSRESCUE mode does not trigger failsafe - we can always disarm in that mode
+                    // in a true signal loss situation, allow disarm only once we regain validated RxData
                     rcDisarmTicks++;
                     if (rcDisarmTicks > 3) {
                         // require three duplicate disarm values in a row before we disarm

@@ -137,7 +137,6 @@ enum {
 };
 
 #define GYRO_WATCHDOG_DELAY 80 //  delay for gyro sync
-
 #ifdef USE_RUNAWAY_TAKEOFF
 #define RUNAWAY_TAKEOFF_PIDSUM_THRESHOLD         600   // The pidSum threshold required to trigger - corresponds to a pidSum value of 60% (raw 600) in the blackbox viewer
 #define RUNAWAY_TAKEOFF_ACTIVATE_DELAY           75000 // (75ms) Time in microseconds where pidSum is above threshold to trigger
@@ -564,6 +563,7 @@ void disarm(flightLogDisarmReason_e reason)
     }
 }
 
+// [新增] 功能：执行普通或自主解锁共用的解锁检查，并返回是否成功。
 static bool tryArmInternal(bool autonomous)
 {
     if (armingConfig()->gyro_cal_on_first_arm) {
@@ -576,7 +576,7 @@ static bool tryArmInternal(bool autonomous)
     armingDisableFlags_e blockingFlags = getArmingDisableFlags();
 
     if(autonomous) {
-        blockingFlags &= ~ARMING_DISABLED_ANGLE;
+        blockingFlags &= ~(ARMING_DISABLED_ANGLE | ARMING_DISABLED_THROTTLE | ARMING_DISABLED_ARM_SWITCH);
     }
 
     if (!blockingFlags) {
@@ -704,11 +704,13 @@ if (isMotorProtocolDshot()) {
     return false;
 }
 
+// [修改] 功能：保留原有飞手解锁入口，调用共用解锁流程。
 void tryArm(void)
 {
     (void)tryArmInternal(false);
 }
 
+// [新增] 功能：使用自主流程允许的解锁条件尝试解锁并返回结果。
 bool tryArmAutonomous(void)
 {
     return tryArmInternal(true);
@@ -845,6 +847,7 @@ bool wasThrottleRaised(void)
 /*
  * processRx called from taskUpdateRxMain
  */
+// [修改] 功能：处理接收机输入，并在自主翻转时保持 PID 稳定化有效。
 bool processRx(timeUs_t currentTimeUs)
 {
     if (!calculateRxChannelsAndUpdateFailsafe(currentTimeUs)) {
@@ -884,7 +887,7 @@ bool processRx(timeUs_t currentTimeUs)
 
     // Note: If Airmode is enabled, on arming, iTerm and PIDs will be off until throttle exceeds the threshold (OFF while disarmed)
     // If not, iTerm will be off at low throttle, with pidStabilisationState determining whether PIDs will be active
-    if (ARMING_FLAG(ARMED) && (isAirmodeActive || throttleActive || launchControlActive || isFixedWing())) {
+    if (ARMING_FLAG(ARMED) && (isAirmodeActive || throttleActive || launchControlActive || isFixedWing() || autonomousModeIsFlipActive())) {
         pidSetItermReset(false);
         pidStabilisationState(PID_STABILISATION_ON);
     } else {
@@ -986,6 +989,7 @@ bool processRx(timeUs_t currentTimeUs)
     return true;
 }
 
+// [修改] 功能：处理飞行模式和 RC 调整，同时应用自主模式的输入屏蔽与保持请求。
 void processRxModes(timeUs_t currentTimeUs)
 {
     static bool armedBeeperOn = false;
@@ -1061,14 +1065,14 @@ void processRxModes(timeUs_t currentTimeUs)
     }
 #endif
 
-    if (!cliMode && !(IS_RC_MODE_ACTIVE(BOXPARALYZE) && !ARMING_FLAG(ARMED))) {
+    if (!cliMode && !(IS_RC_MODE_ACTIVE(BOXPARALYZE) && !ARMING_FLAG(ARMED))
+        && !autonomousModeSuppressesPilotInput()) {
         processRcAdjustments(currentControlRateProfile);
     }
 
     bool canUseHorizonMode = true;
     if ((IS_RC_MODE_ACTIVE(BOXANGLE)
         || autonomousModeRequestsAngle()
-        || IS_RC_MODE_ACTIVE(BOXUSER3)
         || failsafeIsActive()
 #ifdef USE_ALTITUDE_HOLD
         || FLIGHT_MODE(ALT_HOLD_MODE)
@@ -1198,7 +1202,7 @@ void processRxModes(timeUs_t currentTimeUs)
         // and either the alt_hold switch is activated, or are in failsafe landing mode,
         // or an autopilot mission needs altitude control, or a switch-rescue fallback descent
         && (autonomousModeRequestsAltitudeHold() || (!autonomousModeSuppressesPilotHoldModes()
-        && IS_RC_MODE_ACTIVE(BOXALTHOLD)) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE) || flightPlanNavIsRescueDescentActive())
+        && (IS_RC_MODE_ACTIVE(BOXALTHOLD) || autonomousModeUserRequestsAltitudeHold())) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE) || flightPlanNavIsRescueDescentActive())
         // and we have Acc for self-levelling
         && sensors(SENSOR_ACC)
         // and we have altitude data
@@ -1222,7 +1226,7 @@ void processRxModes(timeUs_t currentTimeUs)
         // or an autopilot mission needs the position controller
         && (autonomousModeRequestsPositionHold()
             || (!autonomousModeSuppressesPilotHoldModes()
-                && (IS_RC_MODE_ACTIVE(BOXPOSHOLD) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE))))
+                && ((IS_RC_MODE_ACTIVE(BOXPOSHOLD) || autonomousModeUserRequestsPositionHold()) || failsafeIsActive() || FLIGHT_MODE(AUTOPILOT_MODE))))
         // and we have Acc for self-levelling
         && sensors(SENSOR_ACC)
         // but not until throttle is raised
@@ -1337,6 +1341,7 @@ void processRxModes(timeUs_t currentTimeUs)
     pidSetAntiGravityState(IS_RC_MODE_ACTIVE(BOXANTIGRAVITY) || featureIsEnabled(FEATURE_ANTI_GRAVITY));
 }
 
+// [修改] 功能：执行 PID 控制任务，并在自主翻转期间抑制失控起飞保护误触发。
 static FAST_CODE_NOINLINE void subTaskPidController(timeUs_t currentTimeUs)
 {
     uint32_t startTime = 0;
@@ -1354,6 +1359,7 @@ static FAST_CODE_NOINLINE void subTaskPidController(timeUs_t currentTimeUs)
         && pidConfig()->runaway_takeoff_prevention
         && !runawayTakeoffCheckDisabled
         && !crashFlipModeActive
+        && !autonomousModeIsFlipActive()
         && !runawayTakeoffTemporarilyDisabled
         && !FLIGHT_MODE(GPS_RESCUE_MODE)   // disable Runaway Takeoff triggering if GPS Rescue is active
         // check that motors are running

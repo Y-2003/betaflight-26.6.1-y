@@ -14,64 +14,59 @@ channels[0] = 1500  # CH1 Roll
 channels[1] = 1500  # CH2 Pitch
 channels[2] = 1000  # CH3 Throttle
 channels[3] = 1500  # CH4 Yaw
-channels[4] = 1000  # CH5 ARM
-channels[5] = 1000  # CH6 AUTOPILOT
-channels[6] = 1000  # CH7 autonomous TEST trigger
-channels[7] = 1000  # CH8 BOXFAILSAFE
-channels[8] = 1000  # CH9 RELEASE command
-
-channel_labels = [
-    "ROLL",
-    "PITCH",
-    "THROTTLE",
-    "YAW",
-    "ARM",
-    "AUTOPILOT",
-    "AUTO AUTHORIZATION",
-    "BOXFAILSAFE",
-    "RELEASE COMMAND",
-]
+channels[4] = 1000
+channels[5] = 1000
+channels[6] = 1000
+channels[7] = 1000
+channels[8] = 1000
+channels[9] = 1000
+channels[10] = 1000
+channels[11] = 1000
+channels[12] = 1000
+channels[13] = 1000
+channels[14] = 1000
+channels[15] = 1000
 
 running = True
 lock = threading.Lock()
 
 
+# [新增] 功能：打印当前 16 个 SITL RC 通道值。
 def print_status():
     with lock:
         print("\nCurrent RC:")
-        for i in range(9):
-            print(f"  CH{i + 1}: {channels[i]}  # {channel_labels[i]}")
-
-        print()
-        print(f"  ARM         : {'ON' if channels[4] > 1800 else 'OFF'}")
-        print(f"  AUTOPILOT   : {'ON' if channels[5] > 1800 else 'OFF'}")
-        print(f"  AUTO TEST   : {'ON' if channels[6] > 1800 else 'OFF'}")
-        print(f"  BOXFAILSAFE : {'ON' if channels[7] > 1800 else 'OFF'}")
-        print(f"  RELEASE     : {'ON' if channels[8] > 1800 else 'OFF'}")
+        for i in range(16):
+            label = ("  # Roll", "  # Pitch", "  # Throttle", "  # Yaw")[i] if i < 4 else ""
+            print(f"  CH{i + 1}: {channels[i]}{label}")
         print()
 
 
+# [新增] 功能：在后台读取命令行并更新 RC 通道或触发开关脉冲。
 def command_thread():
     global running
 
     print("""
 Commands:
-  ch <number> <value>   e.g. ch 5 2000
+  ch1 <value>            # Roll
+  ch2 <value>            # Pitch
+  ch3 <value>            # Throttle
+  ch4 <value>            # Yaw
+  ch5 <value>
+  ch6 <value>
+  ch7 <value>
+  ch8 <value>
+  ch9 <value>
+  ch10 <value>
+  ch11 <value>
+  ch12 <value>
+  ch13 <value>
+  ch14 <value>
+  ch15 <value>
+  ch16 <value>
 
-  arm on
-  arm off
+  ch <number> <value>    e.g. ch 5 2000
 
-  autopilot on
-  autopilot off
-
-  auto on
-  auto off
-
-  boxfailsafe on
-  boxfailsafe off
-
-  release on
-  release off
+  ud<number>             e.g. ud5 (also accepts ud+5)
 
   status
   help
@@ -91,7 +86,42 @@ Commands:
         parts = line.split()
 
         try:
-            if parts[0] == "ch" and len(parts) == 3:
+            if len(parts) == 1 and parts[0].startswith("ud"):
+                channel_text = parts[0][2:].lstrip("+")
+                ch = int(channel_text)
+
+                if not 1 <= ch <= 16:
+                    print("Channel must be 1..16")
+                    continue
+
+                with lock:
+                    channels[ch - 1] = 2000
+                print(f"UD CH{ch} = 2000")
+
+                time.sleep(0.5)
+
+                with lock:
+                    channels[ch - 1] = 1000
+                print(f"UD CH{ch} = 1000")
+
+            elif len(parts) == 2 and parts[0].startswith("ch"):
+                ch = int(parts[0][2:])
+                value = int(parts[1])
+
+                if not 1 <= ch <= 16:
+                    print("Channel must be 1..16")
+                    continue
+
+                if not 800 <= value <= 2200:
+                    print("Value should normally be 800..2200")
+                    continue
+
+                with lock:
+                    channels[ch - 1] = value
+
+                print(f"CH{ch} = {value}")
+
+            elif parts[0] == "ch" and len(parts) == 3:
                 ch = int(parts[1])
                 value = int(parts[2])
 
@@ -108,68 +138,15 @@ Commands:
 
                 print(f"CH{ch} = {value}")
 
-            elif parts == ["arm", "on"]:
-                with lock:
-                    channels[4] = 2000
-                print("ARM ON (CH5=2000)")
-
-            elif parts == ["arm", "off"]:
-                with lock:
-                    channels[4] = 1000
-                print("ARM OFF (CH5=1000)")
-
-            elif parts == ["autopilot", "on"]:
-                with lock:
-                    channels[5] = 2000
-                print("AUTOPILOT ON (CH6=2000)")
-
-            elif parts == ["autopilot", "off"]:
-                with lock:
-                    channels[5] = 1000
-                print("AUTOPILOT OFF (CH6=1000)")
-
-            elif parts == ["auto", "on"]:
-                with lock:
-                    channels[6] = 2000
-                print("AUTO TEST ON (CH7=2000)")
-
-            elif parts == ["auto", "off"]:
-                with lock:
-                    channels[6] = 1000
-                print("AUTO TEST OFF (CH7=1000)")
-
-            elif parts == ["boxfailsafe", "on"]:
-                with lock:
-                    channels[7] = 2000
-                print("BOXFAILSAFE ON (CH8=2000)")
-
-            elif parts == ["boxfailsafe", "off"]:
-                with lock:
-                    channels[7] = 1000
-                print("BOXFAILSAFE OFF (CH8=1000)")
-
-            elif parts == ["release", "on"]:
-                with lock:
-                    channels[8] = 2000
-                print("RELEASE ON (CH9=2000)")
-
-            elif parts == ["release", "off"]:
-                with lock:
-                    channels[8] = 1000
-                print("RELEASE OFF (CH9=1000)")
-
             elif parts == ["status"]:
                 print_status()
 
             elif parts == ["help"]:
                 print("""
 Commands:
+  ch1..ch16 <value>
   ch <number> <value>
-  arm on/off
-  autopilot on/off
-  auto on/off
-  boxfailsafe on/off
-  release on/off
+  ud<number> (or ud+<number>)
   status
   quit
 """)

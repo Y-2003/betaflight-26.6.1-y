@@ -47,6 +47,7 @@
 
 #include "flight/alt_hold.h"
 #include "flight/autopilot.h"
+#include "flight/autonomous_mode.h"
 #include "flight/failsafe.h"
 #include "flight/gps_rescue.h"
 #include "flight/imu.h"
@@ -673,10 +674,11 @@ static void applyMixerAdjustment(float *motorMix, const float motorMixMin, const
     throttle = constrainf(throttle, -normalizedMotorMixMin, 1.0f - normalizedMotorMixMax);
 }
 
+// [修改] 功能：计算电机混控输出，并在自主翻转时强制启用空模式补偿。
 FAST_CODE_NOINLINE void mixTable(timeUs_t currentTimeUs)
 {
     const bool launchControlActive = isLaunchControlActive();
-    const bool airmodeEnabled = isAirmodeEnabled() || launchControlActive;
+    const bool airmodeEnabled = isAirmodeEnabled() || launchControlActive || autonomousModeIsFlipActive();
 
     // Find min and max throttle based on conditions. Throttle has to be known before mixing
     calculateThrottleAndCurrentMotorEndpoints(currentTimeUs);

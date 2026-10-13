@@ -65,6 +65,8 @@
  */
 
 static failsafeState_t failsafeState;
+static bool autonomousLockRequestActive;
+static bool autonomousLockTriggerLatched;
 
 PG_REGISTER_WITH_RESET_TEMPLATE(failsafeConfig_t, failsafeConfig, PG_FAILSAFE_CONFIG, 2);
 
@@ -100,6 +102,7 @@ const char * const failsafeProcedureNames[FAILSAFE_PROCEDURE_COUNT] = {
 /*
  * Should called when the failsafe config needs to be changed - e.g. a different profile has been selected.
  */
+// [修改] 功能：重置 failsafe 状态，并清除自主链路锁定标志。
 void failsafeReset(void)
 {
     failsafeState.rxDataFailurePeriod = failsafeConfig()->failsafe_delay * MILLIS_PER_TENTH_SECOND;
@@ -121,6 +124,8 @@ void failsafeReset(void)
     failsafeState.phase = FAILSAFE_IDLE;
     failsafeState.rxLinkState = FAILSAFE_RXLINK_DOWN;
     failsafeState.boxFailsafeSwitchWasOn = false;
+    autonomousLockRequestActive = false;
+    autonomousLockTriggerLatched = false;
 #if ENABLE_RESCUE_PLAN
     failsafeState.autopilotEngageDeadline = 0;
 #endif
@@ -144,10 +149,59 @@ bool failsafeIsMonitoring(void)
     return failsafeState.monitoring;
 }
 
-bool failsafeIsActive(void) // real or BOXFAILSAFE induced stage 2 failsafe is currently active
+// [修改] 功能：查询真实、BOXFAILSAFE 或 USER2 自主锁定触发的 failsafe 状态。
+bool failsafeIsActive(void) // real, BOXFAILSAFE, or USER2 induced stage 2 failsafe is currently active
 {
     return failsafeState.active;
 }
+
+bool failsafeIsAutonomousLockActive(void)
+{
+    return autonomousLockRequestActive || autonomousLockTriggerLatched;
+}
+
+// [新增] 功能：由 USER2 自主流程请求或解除接收链路锁定，并维护 failsafe 状态。
+void failsafeRequestAutonomousLock(bool active)
+{
+    if (active) {
+        if (!autonomousLockRequestActive) {
+            autonomousLockRequestActive = true;
+            if (failsafeState.phase == FAILSAFE_IDLE) {
+                autonomousLockTriggerLatched = true;
+                failsafeState.rxLinkState = FAILSAFE_RXLINK_DOWN;
+                failsafeState.validRxDataFailedAt = millis();
+                failsafeState.receivingRxDataPeriodPreset = 0;
+                setArmingDisabled(ARMING_DISABLED_RX_FAILSAFE);
+            }
+        }
+    } else {
+        autonomousLockRequestActive = false;
+        // USER2 can be released after its intentional failsafe has already
+        // disarmed the aircraft. In that case the state machine is normally
+        // in RX_LOSS_MONITORING, not IDLE yet. Keep the lock while armed so
+        // a real failsafe cannot be bypassed, but release it once disarmed so
+        // valid RX data can drive the normal recovery path.
+        if (!ARMING_FLAG(ARMED)
+            && (failsafeState.phase == FAILSAFE_IDLE
+                || failsafeState.phase == FAILSAFE_RX_LOSS_MONITORING)) {
+            autonomousLockTriggerLatched = false;
+
+            // USER2 intentionally holds the link down while disarmed. Once
+            // it is released, restore the normal RX state immediately when
+            // valid flight-channel data is still arriving. Without this,
+            // ARMING_DISABLED_RX_FAILSAFE can remain set because valid RX
+            // packets were ignored while the autonomous lock was active.
+            if (rxAreFlightChannelsValid()) {
+                failsafeState.rxLinkState = FAILSAFE_RXLINK_UP;
+                // USER2 is an explicit release, so do not retain the normal
+                // post-link-loss recovery delay after the requested hold.
+                failsafeState.receivingRxDataPeriod = millis() - 1;
+                unsetArmingDisabled(ARMING_DISABLED_RX_FAILSAFE);
+            }
+        }
+    }
+}
+
 
 void failsafeStartMonitoring(void)
 {
@@ -159,8 +213,12 @@ static bool failsafeShouldHaveCausedLandingByNow(void)
     return (millis() > failsafeState.landingShouldBeFinishedAt);
 }
 
+// [修改] 功能：判断当前是否收到可用于正常控制和解锁的有效接收机数据。
 bool failsafeIsReceivingRxData(void)
 {
+    if (autonomousLockRequestActive || autonomousLockTriggerLatched) {
+        return false;
+    }
     return (failsafeState.rxLinkState == FAILSAFE_RXLINK_UP);
     // False with BOXFAILSAFE switch or when no valid packets for RXLOSS_TRIGGER_INTERVAL or any flight channel invalid for 300ms,
     // becomes true immediately BOXFAILSAFE switch reverts, or after recovery period expires when valid packets are received
@@ -172,18 +230,25 @@ void failsafeOnRxSuspend(uint32_t usSuspendPeriod)
     failsafeState.validRxDataReceivedAt += (usSuspendPeriod / 1000);    // / 1000 to convert micros to millis
 }
 
+// [修改] 功能：处理接收机恢复事件，同时保留自主锁定造成的链路断开状态。
 void failsafeOnRxResume(void)
 {
     failsafeState.validRxDataReceivedAt = millis();                     // prevent RX link down trigger, restart rx link up
-    failsafeState.rxLinkState = FAILSAFE_RXLINK_UP;                     // do so while rx link is up
+    failsafeState.rxLinkState = (autonomousLockRequestActive || autonomousLockTriggerLatched)
+        ? FAILSAFE_RXLINK_DOWN : FAILSAFE_RXLINK_UP;
 }
 
+// [修改] 功能：处理有效 RC 数据，并在自主锁定期间阻止其恢复正常链路状态。
 void failsafeOnValidDataReceived(void)
 // runs, after prior a signal loss, immediately when packets are received or the BOXFAILSAFE switch is reverted
 // rxLinkState will go RXLINK_UP immediately if BOXFAILSAFE goes back ON since receivingRxDataPeriodPreset is set to zero in that case
 // otherwise RXLINK_UP is delayed for the recovery period (failsafe_recovery_delay, default 500ms, 1-20, min 0.1s)
 {
     failsafeState.validRxDataReceivedAt = millis();
+
+    if (autonomousLockRequestActive || autonomousLockTriggerLatched) {
+        return;
+    }
 
     if (failsafeState.validRxDataFailedAt == 0) {
         // after initialisation, we sometimes only receive valid packets, so validRxDataFailedAt will remain unset (0)
@@ -275,6 +340,7 @@ static void failsafeStartProcedure(failsafeProcedure_e procedure)
     }
 }
 
+// [修改] 功能：推进 failsafe 状态机，并把自主锁定纳入 failsafe 触发和恢复流程。
 FAST_CODE_NOINLINE void failsafeUpdateState(void)
 // triggered directly, and ONLY, by the scheduler, at 10ms = PERIOD_RXDATA_FAILURE - intervals
 {
@@ -307,10 +373,12 @@ FAST_CODE_NOINLINE void failsafeUpdateState(void)
 
     do {
         reprocessState = false;
+        const bool autonomousLockWasActive = autonomousLockRequestActive || autonomousLockTriggerLatched;
 
         switch (failsafeState.phase) {
             case FAILSAFE_IDLE:
-                failsafeState.boxFailsafeSwitchWasOn = IS_RC_MODE_ACTIVE(BOXFAILSAFE);
+                failsafeState.boxFailsafeSwitchWasOn = IS_RC_MODE_ACTIVE(BOXFAILSAFE)
+                    || autonomousLockRequestActive || autonomousLockTriggerLatched;
                 // store and use the switch state as it was at the start of the failsafe
                 if (armed) {
                     // Track throttle command below minimum time
@@ -492,10 +560,45 @@ FAST_CODE_NOINLINE void failsafeUpdateState(void)
                 failsafeState.receivingRxDataPeriod = millis() + failsafeState.receivingRxDataPeriodPreset;
                 //  customise receivingRxDataPeriod according to type of failsafe
                 failsafeState.phase = FAILSAFE_RX_LOSS_MONITORING;
+                if (failsafeIsAutonomousLockActive()
+                    && !ARMING_FLAG(ARMED)
+                    && !IS_RC_MODE_ACTIVE(BOXFAILSAFE)) {
+                    // The USER2 high level is a one-shot trigger. Release its
+                    // synthetic lock after failsafe has actually disarmed;
+                    // USER2 does not need to return low before autonomous arm.
+                    autonomousLockRequestActive = false;
+                    autonomousLockTriggerLatched = false;
+                    if (rxAreFlightChannelsValid()) {
+                        failsafeState.rxLinkState = FAILSAFE_RXLINK_UP;
+                        failsafeState.receivingRxDataPeriod = millis() - 1;
+                        unsetArmingDisabled(ARMING_DISABLED_RX_FAILSAFE);
+                        receivingRxData = failsafeIsReceivingRxData();
+                    }
+                }
                 reprocessState = true;
                 break;
 
             case FAILSAFE_RX_LOSS_MONITORING:
+                if (failsafeIsAutonomousLockActive()
+                    && !ARMING_FLAG(ARMED)
+                    && !IS_RC_MODE_ACTIVE(BOXFAILSAFE)) {
+                    autonomousLockRequestActive = false;
+                    autonomousLockTriggerLatched = false;
+                    if (rxAreFlightChannelsValid()) {
+                        failsafeState.rxLinkState = FAILSAFE_RXLINK_UP;
+                        failsafeState.receivingRxDataPeriod = millis() - 1;
+                        if (autonomousLockWasActive) {
+                            // Valid RX was deliberately ignored while the
+                            // synthetic USER2 lock was active. Release the
+                            // corresponding arming block when that lock is
+                            // removed after the failsafe disarm.
+                            unsetArmingDisabled(ARMING_DISABLED_RX_FAILSAFE);
+                        }
+                    }
+                    // Re-evaluate receivingRxData after removing the
+                    // synthetic USER2 loss for this scheduler pass.
+                    receivingRxData = failsafeIsReceivingRxData();
+                }
                 // receivingRxData is true when we get valid Rx Data and the recovery period has expired
                 // for switch initiated failsafes, the recovery period is zero
                 if (receivingRxData) {
@@ -519,6 +622,7 @@ FAST_CODE_NOINLINE void failsafeUpdateState(void)
 #endif
                 DISABLE_FLIGHT_MODE(FAILSAFE_MODE);
                 unsetArmingDisabled(ARMING_DISABLED_FAILSAFE);
+
                 reprocessState = true;
                 break;
 
@@ -528,6 +632,8 @@ FAST_CODE_NOINLINE void failsafeUpdateState(void)
 
         DEBUG_SET(DEBUG_FAILSAFE, 0, failsafeState.boxFailsafeSwitchWasOn);
         DEBUG_SET(DEBUG_FAILSAFE, 3, failsafeState.phase);
+        DEBUG_SET(DEBUG_FAILSAFE, 6, failsafeIsAutonomousLockActive());
+        DEBUG_SET(DEBUG_FAILSAFE, 7, getArmingDisableFlags() & 0x7FFF);
 
     } while (reprocessState);
 
