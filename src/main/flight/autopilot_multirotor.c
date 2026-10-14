@@ -60,6 +60,11 @@ __attribute__((weak)) bool autonomousModeGetPositionSetpoint(vector2_t *targetPo
     UNUSED(angleLimitScale);
     return false;
 }
+
+__attribute__((weak)) bool autonomousModeIsBraking(void)
+{
+    return false;
+}
 #endif
 
 // DEBUG_AUTOPILOT_PID each parameter on the axis set by gyro_filter_debug_axis
@@ -100,10 +105,14 @@ __attribute__((weak)) bool autonomousModeGetPositionSetpoint(vector2_t *targetPo
 #define ALTITUDE_P_SCALE       0.005f
 #define ALTITUDE_I_SCALE       0.002f
 #define ALTITUDE_D_SCALE       0.01f
-#define ALTITUDE_F_KF_REF     30.0f
-#define ALTITUDE_F_SCALE       0.1f / ALTITUDE_F_KF_REF // full feedforward scale value when altitudeF CLI = 30
-#define ALTITUDE_VEL_CMD_MAX_DEFAULT_CM_S  1500.0f
-#define ALTITUDE_I_LIMIT      150.0f
+#define ALTITUDE_F_KF_REF      30.0f // altitudeF reference value used to normalize feedforward
+#define ALTITUDE_F_SCALE        0.1f / ALTITUDE_F_KF_REF // full feedforward scale when altitudeF CLI = 30
+#define ALTITUDE_VEL_CMD_MAX_DEFAULT_CM_S 1500.0f // fallback maximum commanded vertical speed, unit: cm/s
+#define ALTITUDE_I_LIMIT         150.0f // altitude integrator output limit, unit: PWM
+
+// Autonomous vertical braking parameters. These do not change pilot ALT HOLD.
+#define AUTONOMOUS_VERTICAL_BRAKE_D_GAIN 1.35f // multiplier on altitude D damping during autonomous braking
+#define AUTONOMOUS_VERTICAL_BRAKE_THROTTLE_MAX_PWM 2000.0f // autonomous braking throttle ceiling, unit: PWM
 
 // Unified XY control: a single distance-based PIDAF law serves position hold,
 // nav missions and GPS rescue. D is a velocity-proportional factor, A is
@@ -116,6 +125,9 @@ __attribute__((weak)) bool autonomousModeGetPositionSetpoint(vector2_t *targetPo
 #define XY_ACCEL_SCALE         0.0006f   // distance A  / velocity D
 #define XY_F_SCALE             (0.03f / POSHOLD_TASK_RATE_HZ) // target-velocity delta scale
 #define XY_DRAG_SCALE          0.0002f   // velocity-based drag correction, must stay below the D scale
+
+// Autonomous horizontal braking parameters. These do not change pilot POS HOLD.
+#define AUTONOMOUS_HORIZONTAL_BRAKE_D_GAIN 1.25f // multiplier on horizontal velocity damping during autonomous braking
 
 #define BRAKING_MODE_THRESHOLD               100.0f // enter braking when a fresh hold starts above this speed (cm/s)
 #define POSHOLD_VELOCITY_REVERSAL_THRESHOLD   50.0f // velocity dot-product reversal beyond this ends braking
@@ -327,7 +339,9 @@ void altitudeControl(float targetAltitudeCm, float taskIntervalS, float targetAl
         const float ratio = absVerticalVelocity / boostThreshold;
         dBoost = (3.0f * ratio - 2.0f) / ratio; // 1 at 5m/s, 2 at 10m/s...
     }
-    const float altitudeD = velocityError * altitudeKd * dBoost;
+    const float altitudeD = velocityError * altitudeKd
+                          * dBoost
+                          * (autonomousModeIsBraking() ? AUTONOMOUS_VERTICAL_BRAKE_D_GAIN : 1.0f);
     const float altitudeF = targetVerticalVelocity * altitudeKf;
 
     const float hoverOffset = (float)autopilotGetEffectiveHoverThrottlePwm() - PWM_RANGE_MIN;
@@ -344,7 +358,10 @@ void altitudeControl(float targetAltitudeCm, float taskIntervalS, float targetAl
     throttleOffset *= tiltMultiplier;
 
     float newThrottle = PWM_RANGE_MIN + throttleOffset;
-    newThrottle = constrainf(newThrottle, autopilotConfig()->throttleMin, autopilotConfig()->throttleMax);
+    const float throttleMax = autonomousModeIsBraking()
+        ? fmaxf((float)autopilotConfig()->throttleMax, AUTONOMOUS_VERTICAL_BRAKE_THROTTLE_MAX_PWM)
+        : (float)autopilotConfig()->throttleMax;
+    newThrottle = constrainf(newThrottle, autopilotConfig()->throttleMin, throttleMax);
 
     throttleOut = scaleRangef(newThrottle, MAX(rxConfig()->mincheck, PWM_RANGE_MIN), PWM_RANGE_MAX, 0.0f, 1.0f);
     throttleOut = constrainf(throttleOut, 0.0f, 1.0f);
@@ -952,7 +969,12 @@ bool positionControl(void)
         }
 #endif
 
-        const float brakeBoost = ap.isPosHoldBraking ? (1.0f + fabsf(velocity.v[axis]) * 0.0005f) : 1.0f; // ~2x at 20 m/s
+        const float autonomousBrakeGain = autonomousPositionControl && !autonomousPositionLocked
+            ? AUTONOMOUS_HORIZONTAL_BRAKE_D_GAIN
+            : 1.0f;
+        const float brakeBoost = ap.isPosHoldBraking
+            ? (1.0f + fabsf(velocity.v[axis]) * 0.0005f) * autonomousBrakeGain
+            : 1.0f; // base boost is ~2x at 20 m/s; autonomous braking adds its own multiplier
 
         pidP.v[axis] = distanceError.v[axis] * xyPid.Kp;
         pidI.v[axis] = distanceErrorIntegral.v[axis] * xyPid.Ki;

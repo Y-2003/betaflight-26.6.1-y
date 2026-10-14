@@ -18,9 +18,9 @@ typedef enum {
     AUTONOMOUS_MODE_WAITING_FOR_ARM,
     AUTONOMOUS_MODE_ACCEL_WAITING,
     AUTONOMOUS_MODE_FLIP,
-    AUTONOMOUS_MODE_ARMED,
     AUTONOMOUS_MODE_HOVER_ENTRY,
     AUTONOMOUS_MODE_BRAKING,
+    AUTONOMOUS_MODE_READY,
 } autonomousModeState_e;
 
 // [新增] 功能：进入自由落体检测阶段。
@@ -46,6 +46,8 @@ bool autonomousModeRequestsPositionHold(void);
 bool autonomousModeSuppressesPilotHoldModes(void);
 // [新增] 功能：读取当前自主状态和 USER1 原始拨杆位置。
 autonomousModeState_e autonomousModeGetState(void);
+// 返回是否处于自主垂直/水平刹车阶段；不包含刹车完成后的自主悬停阶段。
+bool autonomousModeIsBraking(void);
 autonomousUser1Position_e autonomousModeGetUser1Position(void);
 // [兼容] USER1 不直接请求高度/位置保持；这两个接口始终返回 false。
 bool autonomousModeUserRequestsAltitudeHold(void);

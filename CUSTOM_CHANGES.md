@@ -45,7 +45,7 @@
 自主流程使用 ARM、USER1、USER2 和 USER3 四类开关输入：
 
 - ARM 是飞手允许自主解锁的许可，同时也是 USER3 投掷流程的触发边沿输入。
-- USER2 上升沿作为一次性触发，要求 ARM 已打开且 USER1 能读到有效位置；触发后请求 synthetic failsafe 接收链路锁定。failsafe 完成处置、飞机解除 ARM 并恢复有效 RX 后，再等待代码头部定义的 2 秒延时，进入自主解锁和自由落体检测。当前 USER2 高电平可以继续完成本次流程；下一次触发前必须重新检测到低电平。
+- USER2 上升沿作为一次性触发，要求 ARM 已打开且 USER1 能读到有效位置；触发后请求 synthetic failsafe 接收链路锁定。failsafe 完成处置、飞机解除 ARM 并恢复有效 RX 后，再等待代码头部定义的 1 秒延时，进入自主解锁和自由落体检测。当前 USER2 高电平可以继续完成本次流程；下一次触发前必须重新检测到低电平。
 - USER3 是投掷机专用的备用触发路径：USER2 为低、USER3 为高且 ARM 出现上升沿时触发自主流程，同样要求 USER1 初始位置有效。USER3 触发边沿后释放 synthetic RX 锁，等待自由落体；USER3 高电平期间禁止普通 ARM 解锁。
 - USER1 用于读取三段拨杆初始位置并检测位置变化。自主流程开始时记录初始位置，运行期间位置持续变化 30 ms 会中止自主流程。
 
@@ -56,7 +56,7 @@ USER1 需要在地面站的 Modes 页面配置，以便固件从 `modeActivation
 - 大于等于 1800：`AUTONOMOUS_USER1_POSITION_HIGH`
 - 1701 至 1799：`AUTONOMOUS_USER1_POSITION_INVALID`
 
-三个 USER1 位置不会直接启用 `ALT_HOLD_MODE` 或 `POS_HOLD_MODE`。自主状态机进入 `AUTONOMOUS_MODE_ARMED` 后，高度保持和位置保持由状态机自身请求，与 USER1 当前档位无关。
+三个 USER1 位置不会直接启用 `ALT_HOLD_MODE` 或 `POS_HOLD_MODE`。自主状态机进入 `AUTONOMOUS_MODE_READY` 后，高度保持和最终位置保持由状态机自身请求，与 USER1 当前档位无关。
 
 自主状态按以下顺序流转：
 
@@ -67,17 +67,17 @@ IDLE
   -> FLIP（机体倒置时）
   -> HOVER_ENTRY
   -> BRAKING
-  -> ARMED
+  -> READY
 ```
 
-机体未倒置时，`ACCEL_WAITING` 可直接进入 `HOVER_ENTRY`。`HOVER_ENTRY` 保持悬停油门余量的 50% 作为保守入口参考；当加速度计有效且机体倾角恢复到约 26 度以内、Z 高度估计有效时进入 `BRAKING`。`BRAKING` 从实测位置和速度启动 jerk/加速度受限的竖直、水平减速轨迹，高度闭环在此阶段接管油门；XY 估计无效时只执行定高减速。速度、加速度和姿态稳定约 250 ms 后进入 `ARMED`，再锁定最终高度，XY 有效时锁定最终位置。自主翻转最多持续 1 秒，结束阈值和油门闭环参数均在 `autonomous_mode.c` 文件头部定义。
+机体未倒置时，`ACCEL_WAITING` 可直接进入 `HOVER_ENTRY`。`HOVER_ENTRY` 使用文件头部定义的入口油门比例；当姿态、角速度和 Z 高度估计连续稳定后进入 `BRAKING`。`BRAKING` 从实测位置和速度启动 jerk/加速度受限的竖直、水平减速轨迹，高度闭环在此阶段接管油门；XY 估计无效时只执行定高减速。速度、加速度和姿态稳定约 250 ms 后进入 `READY`，锁定最终高度，XY 有效时锁定最终位置并申请最终 `POS_HOLD`。自主翻转最多持续 1 秒，结束阈值和油门闭环参数均在 `autonomous_mode.c` 文件头部定义。
 
 ## 自主状态机
 
 ### [自定义新增] `src/main/flight/autonomous_mode.h`
 
 - 第 8-13 行：`autonomousUser1Position_e`，定义 USER1 的低、中、高和无效位置。
-- 第 15-23 行：`autonomousModeState_e`，定义空闲、等待 ARM、自由落体检测、翻转、已解锁、悬停入口和自主减速状态。
+- 第 15-23 行：`autonomousModeState_e`，定义空闲、等待 ARM、自由落体检测、翻转、悬停入口、自主减速和 READY 状态。
 - 第 25-50 行：声明自主流程更新、解锁接管、油门覆盖、翻转输出、控制模式请求、状态读取和中止接口。
 - 第 48-50 行：USER1 高度/位置保持兼容接口固定返回 `false`。
 

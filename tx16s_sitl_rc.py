@@ -25,7 +25,7 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 
 
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "192.168.0.101"
 DEFAULT_PORT = 9004
 SEND_PERIOD = 0.02
 

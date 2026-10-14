@@ -1,0 +1,181 @@
+Betaflight DEBUG_FAILSAFE 参数说明
+=================================
+
+本文档对应当前工程代码，适用于将 debug_mode 设置为 FAILSAFE 后的黑盒日志字段：
+
+    debug[0] ~ debug[7]
+
+注意：当前工程对 DEBUG_FAILSAFE 做了扩展。它不仅记录原生 failsafe 信息，
+还复用了 debug[4] 和 debug[5] 记录自主模式状态。
+
+
+一、8 个参数的含义
+-------------------
+
+debug[0]
+    BOXFAILSAFE 拨杆状态。
+
+    0：BOXFAILSAFE 未打开
+    1：BOXFAILSAFE 已打开
+
+debug[1]
+    接收机底层是否收到信号，对应 rxSignalReceived。
+
+    0：没有收到接收机信号
+    1：收到接收机信号
+
+    该参数只反映接收机是否收到数据，不代表 failsafe 最终是否允许正常控制。
+
+debug[2]
+    failsafe 判断的有效接收链路状态，对应 failsafeIsReceivingRxData()。
+
+    0：链路对正常控制/解锁无效
+    1：链路对正常控制/解锁有效
+
+    它与 debug[1] 不完全相同。即使底层仍收到数据，只要接收链路处于
+    failsafe、USER2 自主锁定或恢复等待阶段，debug[2] 也可能为 0。
+
+debug[3]
+    failsafe 状态机阶段，对应 failsafePhase_e。
+
+    0：FAILSAFE_IDLE，正常状态
+    1：FAILSAFE_RX_LOSS_DETECTED，检测到接收机丢失
+    2：FAILSAFE_LANDING，自动降落
+    3：FAILSAFE_LANDED，已着陆
+    4：FAILSAFE_RX_LOSS_MONITORING，等待接收机恢复
+    5：FAILSAFE_RX_LOSS_RECOVERED，接收机已恢复
+    6：FAILSAFE_GPS_RESCUE，GPS 救援
+    7：FAILSAFE_AUTOPILOT，继续执行自主任务
+
+debug[4]
+    自主模式状态机阶段，对应 autonomousModeState_e。
+
+    0：IDLE，空闲
+    1：WAITING_FOR_ARM，等待自主解锁
+    2：ACCEL_WAITING，等待自由落体/加速度条件
+    3：FLIP，翻转/翻身
+    4：HOVER_ENTRY，调平/进入悬停
+    5：BRAKING，垂直和水平刹车
+    6：READY，刹车完成后的自主定高/定点保持
+
+debug[5]
+    USER2 拨杆是否激活。
+
+    0：USER2 未激活
+    1：USER2 已激活
+
+debug[6]
+    自主接收链路锁定是否激活，对应 failsafeIsAutonomousLockActive()。
+
+    0：自主锁定未激活
+    1：自主锁定已激活
+
+debug[7]
+    解锁禁止原因位掩码，对应 getArmingDisableFlags() 的低 15 位。
+
+    该值可能同时包含多个原因，需要逐位拆分。
+
+
+二、debug[7] 解锁禁止位
+------------------------
+
+bit 0，数值 1
+    ARMING_DISABLED_NO_GYRO：没有陀螺仪
+
+bit 1，数值 2
+    ARMING_DISABLED_FAILSAFE：failsafe 禁止解锁
+
+bit 2，数值 4
+    ARMING_DISABLED_RX_FAILSAFE：接收机 failsafe 禁止解锁
+
+bit 3，数值 8
+    ARMING_DISABLED_NOT_DISARMED：此前没有正确锁机
+
+bit 4，数值 16
+    ARMING_DISABLED_BOXFAILSAFE：BOXFAILSAFE 开关导致禁止解锁
+
+bit 5，数值 32
+    ARMING_DISABLED_RUNAWAY_TAKEOFF：触发失控起飞保护
+
+bit 6，数值 64
+    ARMING_DISABLED_CRASH_DETECTED：检测到碰撞
+
+bit 7，数值 128
+    ARMING_DISABLED_THROTTLE：油门不在安全解锁范围
+
+bit 8，数值 256
+    ARMING_DISABLED_ANGLE：姿态角度不允许解锁
+
+bit 9，数值 512
+    ARMING_DISABLED_BOOT_GRACE_TIME：上电保护时间未结束
+
+bit 10，数值 1024
+    ARMING_DISABLED_NOPREARM：未满足 PREARM 条件
+
+bit 11，数值 2048
+    ARMING_DISABLED_LOAD：CPU 负载问题
+
+bit 12，数值 4096
+    ARMING_DISABLED_CALIBRATING：正在校准
+
+bit 13，数值 8192
+    ARMING_DISABLED_CLI：当前处于 CLI
+
+bit 14，数值 16384
+    ARMING_DISABLED_CMS_MENU：当前处于 CMS 菜单
+
+注意：当前 DEBUG_FAILSAFE 使用 getArmingDisableFlags() & 0x7FFF，
+因此 bit 15 及以上的解锁禁止原因不会写入 debug[7]。
+
+
+三、debug[7] 数值举例
+----------------------
+
+debug[7] = 0
+    没有记录到低 15 位解锁禁止原因。
+
+debug[7] = 128
+    128 = 2^7，表示只有 THROTTLE 原因：油门不在安全范围。
+
+debug[7] = 136
+    136 = 128 + 8，表示同时存在：
+
+    THROTTLE + NOT_DISARMED
+
+    即油门不安全，并且飞控认为此前没有完成正确锁机。
+
+
+四、分析自主模式时的推荐观察顺序
+----------------------------------
+
+1. 先看 debug[4]，确认自主状态机是否按预期推进：
+
+       1 -> 2 -> 3/4 -> 5 -> 6
+
+   或者是否中途回到 0。
+
+2. 再看 debug[1] 和 debug[2]：
+
+   debug[1] = 1、debug[2] = 0，通常表示底层仍收到数据，
+   但 failsafe 或自主锁定暂时不允许正常控制链路恢复。
+
+3. 查看 debug[3]，确认是否真的进入了原生 failsafe 阶段。
+
+4. 查看 debug[5] 和 debug[6]，确认 USER2 触发和自主锁定状态。
+
+5. 最后拆分 debug[7]，检查具体的禁止解锁原因。
+
+
+五、与黑盒日志字段的对应关系
+------------------------------
+
+黑盒日志中通常显示为：
+
+    debug[0], debug[1], ..., debug[7]
+
+这些值是当前采样时刻的整数值。debug[0]、debug[1]、debug[2]、
+debug[3]、debug[6]、debug[7] 主要由 failsafe/RX 相关任务更新；
+debug[4]、debug[5] 由自主模式状态机更新。
+
+因此在状态切换瞬间，不同参数可能存在一个采样周期的更新时间差，
+分析时应结合时间戳和状态变化边沿判断，不能只看单独一行。
